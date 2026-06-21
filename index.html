@@ -135,7 +135,7 @@
     <textarea id="itemText" placeholder="Item Class: ...&#10;Rarity: ...&#10;..."></textarea>
     <div class="row">
       <button id="priceBtn">Preis prüfen</button>
-      <label class="check"><input type="checkbox" id="singleUseMods" /> Mit Mod-Filtern (statt nur Basistyp)</label>
+      <label class="check"><input type="checkbox" id="singleUseMods" checked /> Mit Mod-Filtern (Prefixes/Suffixes, ~10&nbsp;% Toleranz)</label>
       <span id="singleSpin" class="hidden"><span class="spin"></span></span>
     </div>
     <div id="singleMsg"></div>
@@ -152,7 +152,7 @@
     <div class="row">
       <button id="buildBtn">Build laden &amp; bepreisen</button>
       <input type="file" id="buildFile" accept=".txt,text/plain" class="secondary" />
-      <label class="check"><input type="checkbox" id="buildUseMods" /> Rares mit Mod-Filtern bepreisen</label>
+      <label class="check"><input type="checkbox" id="buildUseMods" checked /> Rares mit Mod-Filtern bepreisen (Prefixes/Suffixes, ~10&nbsp;% Toleranz)</label>
     </div>
     <div id="buildMsg"></div>
 
@@ -215,8 +215,10 @@ async function init() {
   const leagues = (CONFIG.leagues && CONFIG.leagues.length) ? CONFIG.leagues : [CONFIG.league || "Standard"];
   sel.innerHTML = leagues.map(l => `<option ${l === CONFIG.league ? "selected" : ""}>${esc(l)}</option>`).join("");
 
-  $("singleUseMods").checked = !!CONFIG.default_use_mods;
-  $("buildUseMods").checked = !!CONFIG.default_use_mods;
+  // Mod-Filter (Prefixes/Suffixes) standardmäßig AN. In der UI jederzeit
+  // abschaltbar; die Checkbox ist die Quelle der Wahrheit für die Suche.
+  $("singleUseMods").checked = true;
+  $("buildUseMods").checked = true;
 
   if (!CONFIG.has_session) {
     showMsg($("globalMsg"),

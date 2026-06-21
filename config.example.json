@@ -7,5 +7,6 @@
   "currency_rates": {
     "chaos": 0.02
   },
-  "default_use_mods": false
+  "default_use_mods": true,
+  "mod_value_tolerance": 0.9
 }

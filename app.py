@@ -12,8 +12,10 @@ Ergebnisse an. Es automatisiert KEINE Spiel-Eingaben (kein Whisper, kein Macro).
 from __future__ import annotations
 
 import base64
+import difflib
 import html
 import json
+import math
 import os
 import re
 import threading
@@ -297,6 +299,7 @@ _TAG_SUFFIX_RE = re.compile(
 
 _DATA_LOCK = threading.Lock()
 _STATS_INDEX: Optional[Dict[str, dict]] = None
+_STATS_KEYS: Optional[List[str]] = None  # normalisierte Schlüssel für Fuzzy-Matching
 _BASE_TYPES: Optional[List[str]] = None
 
 
@@ -335,7 +338,7 @@ def normalize_stat_text(text: str) -> str:
 
 def get_stats_index() -> Dict[str, dict]:
     """Laedt /data/stats (einmal) und baut einen normalisierten Text-Index."""
-    global _STATS_INDEX
+    global _STATS_INDEX, _STATS_KEYS
     with _DATA_LOCK:
         if _STATS_INDEX is not None:
             return _STATS_INDEX
@@ -358,6 +361,7 @@ def get_stats_index() -> Dict[str, dict]:
                 if norm and norm not in index:
                     index[norm] = entry
         _STATS_INDEX = index
+        _STATS_KEYS = list(index.keys())
         return index
 
 
@@ -705,25 +709,55 @@ def parse_pob_xml(xml_bytes: bytes) -> Tuple[dict, List[dict]]:
 # --------------------------------------------------------------------------- #
 
 
-def _stat_filters_for(mods: List[str], max_filters: int = 5) -> List[dict]:
-    """Mappt Item-Mods auf Trade-Stat-IDs (exakter normalisierter Abgleich)."""
+def _mod_value_tolerance() -> float:
+    """Faktor, mit dem der Mindestwert eines Mods gesenkt wird (Default 0.9 = -10%)."""
+    try:
+        tol = float(CONFIG.get("mod_value_tolerance", 0.9))
+    except (TypeError, ValueError):
+        tol = 0.9
+    return min(max(tol, 0.0), 1.0)
+
+
+def _stat_filters_for(mods: List[str], max_filters: int = 4) -> List[dict]:
+    """
+    Mappt Item-Mods (Prefixes/Suffixes) auf Trade-Stat-IDs.
+
+    - Erst exakter, dann unscharfer (Fuzzy-)Abgleich gegen /data/stats.
+    - Der Mindestwert wird um die Toleranz gesenkt (z. B. 50 -> 45 bei 0.9),
+      damit auch etwas schwächere Listings als Treffer gelten.
+    """
     index = get_stats_index()
+    keys = _STATS_KEYS or []
+    tolerance = _mod_value_tolerance()
     filters: List[dict] = []
+    seen_ids: set = set()
+
     for mod in mods:
         norm = normalize_stat_text(mod)
-        entry = index.get(norm)
-        if not entry:
+        if not norm:
             continue
+        entry = index.get(norm)
+        if entry is None and keys:
+            # Unscharfer Abgleich für leicht abweichende Formulierungen
+            close = difflib.get_close_matches(norm, keys, n=1, cutoff=0.86)
+            if close:
+                entry = index.get(close[0])
+        if entry is None or entry.get("id") in seen_ids:
+            continue
+
         flt: dict = {"id": entry["id"], "disabled": False}
         num = _NUM_RE.search(mod)
         if num:
             try:
                 value = float(num.group())
                 if value > 0:
-                    flt["value"] = {"min": int(value) if value.is_integer() else value}
+                    reduced = math.floor(value * tolerance)
+                    if reduced >= 1:
+                        flt["value"] = {"min": reduced}
             except ValueError:
                 pass
         filters.append(flt)
+        seen_ids.add(entry["id"])
         if len(filters) >= max_filters:
             break
     return filters
@@ -884,13 +918,13 @@ app = FastAPI(title="PoE2 Price Check", docs_url=None, redoc_url=None)
 
 class PriceRequest(BaseModel):
     text: str
-    use_mods: bool = False
+    use_mods: bool = True
     league: Optional[str] = None
 
 
 class BuildRequest(BaseModel):
     code: str
-    use_mods: bool = False
+    use_mods: bool = True
     league: Optional[str] = None
 
 
