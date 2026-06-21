@@ -1,0 +1,11 @@
+{
+  "poesessid": "",
+  "league": "Standard",
+  "realm": "poe2",
+  "user_agent": "MyPoe2PriceCheck/1.0 (kontakt: deine@mail.tld)",
+  "exalted_per_divine": 200,
+  "currency_rates": {
+    "chaos": 0.02
+  },
+  "default_use_mods": false
+}

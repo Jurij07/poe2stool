@@ -1,0 +1,13 @@
+# Echte Konfiguration mit POESESSID NIE committen
+config.json
+
+# Gecachte Trade-Daten (stats/items)
+cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+.DS_Store

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PoE2 Price Check</title>
+<style>
+  :root {
+    --bg: #14110d;
+    --panel: #1d1a14;
+    --panel2: #26221a;
+    --border: #3a342860;
+    --text: #d8cfbf;
+    --muted: #8a8170;
+    --accent: #c9a24b;
+    --accent2: #e0b85c;
+    --unique: #af6025;
+    --rare: #f5d637;
+    --magic: #8888ff;
+    --normal: #c8c8c8;
+    --good: #6fbf73;
+    --warn: #d8a341;
+    --bad: #cf6a5a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px;
+    line-height: 1.45;
+  }
+  a { color: var(--accent2); }
+  header {
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: linear-gradient(180deg, #1d1a14, #14110d);
+  }
+  header h1 { margin: 0; font-size: 18px; color: var(--accent2); font-weight: 600; letter-spacing: .3px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .grow { flex: 1; }
+  .league-box { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  select, input, textarea, button {
+    font-family: inherit; font-size: 14px; color: var(--text);
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+  }
+  select, input { padding: 6px 8px; }
+  textarea {
+    width: 100%; min-height: 150px; padding: 10px; resize: vertical;
+    font-family: "Consolas", "SF Mono", monospace; font-size: 13px; line-height: 1.4;
+  }
+  button {
+    cursor: pointer; padding: 9px 18px; background: var(--accent); color: #1a160d;
+    font-weight: 600; border: none; border-radius: 6px;
+  }
+  button:hover { background: var(--accent2); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  main { max-width: 1080px; margin: 0 auto; padding: 20px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .tab {
+    padding: 10px 18px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; font-weight: 600;
+  }
+  .tab.active { color: var(--accent2); border-bottom-color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  label.check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+  .hidden { display: none !important; }
+
+  .msg { margin: 14px 0; padding: 11px 14px; border-radius: 8px; font-size: 13px; }
+  .msg.error { background: #3a1d18; border: 1px solid #6e3328; color: #f0b3a6; }
+  .msg.info  { background: #1e2a30; border: 1px solid #2f4654; color: #a9cfe0; }
+  .msg.warn  { background: #332a14; border: 1px solid #5e4d22; color: #e6cf94; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+  tr:hover td { background: #ffffff06; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .rar-UNIQUE { color: var(--unique); font-weight: 600; }
+  .rar-RARE { color: var(--rare); }
+  .rar-MAGIC { color: var(--magic); }
+  .rar-NORMAL, .rar-UNKNOWN { color: var(--normal); }
+
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill.found { background: #1e3320; color: var(--good); }
+  .pill.ballpark { background: #33290f; color: var(--warn); }
+  .pill.no_match { background: #2a2a2a; color: var(--muted); }
+  .pill.error { background: #3a1d18; color: var(--bad); }
+  .pill.pending { background: #20262e; color: #88a; }
+
+  .build-head { display: flex; gap: 20px; align-items: baseline; flex-wrap: wrap; margin: 6px 0 4px; }
+  .build-head .cls { font-size: 18px; color: var(--accent2); font-weight: 600; }
+  .total-box {
+    margin-top: 16px; padding: 14px 18px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 8px; display: flex;
+    justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
+  }
+  .total-box .big { font-size: 22px; color: var(--accent2); font-weight: 700; }
+
+  .progress-wrap { margin: 14px 0; }
+  .bar { height: 8px; background: var(--panel2); border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+  .bar > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .25s; }
+  .price-cell { white-space: nowrap; }
+  .divine-cell { color: var(--accent2); font-weight: 600; white-space: nowrap; }
+  .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--muted); border-top-color: var(--accent2); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .corrupt { color: var(--bad); font-size: 11px; }
+  .footnote { margin-top: 26px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); padding-top: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚔ PoE2 Price Check</h1>
+  <span class="sub">lokal &middot; read-only &middot; offizielle Trade-API</span>
+  <span class="grow"></span>
+  <span class="league-box">
+    Liga:
+    <select id="league"></select>
+  </span>
+</header>
+
+<main>
+  <div id="globalMsg"></div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="single">Einzel-Item</div>
+    <div class="tab" data-tab="build">Build-Code</div>
+  </div>
+
+  <!-- ------------------------------- Einzel-Item ------------------------------- -->
+  <section id="tab-single" class="panel">
+    <div class="hint">Item im Spiel mit <b>Strg+C</b> kopieren und hier einfügen.</div>
+    <textarea id="itemText" placeholder="Item Class: ...&#10;Rarity: ...&#10;..."></textarea>
+    <div class="row">
+      <button id="priceBtn">Preis prüfen</button>
+      <label class="check"><input type="checkbox" id="singleUseMods" /> Mit Mod-Filtern (statt nur Basistyp)</label>
+      <span id="singleSpin" class="hidden"><span class="spin"></span></span>
+    </div>
+    <div id="singleMsg"></div>
+    <div id="singleResult"></div>
+  </section>
+
+  <!-- ------------------------------- Build-Code -------------------------------- -->
+  <section id="tab-build" class="panel hidden">
+    <div class="hint">
+      PoB-Code einfügen (Path of Building → <b>Import/Export → Export → Copy to clipboard</b>)
+      oder eine <b>.txt</b> hochladen.
+    </div>
+    <textarea id="buildCode" placeholder="eNqNVle..."></textarea>
+    <div class="row">
+      <button id="buildBtn">Build laden &amp; bepreisen</button>
+      <input type="file" id="buildFile" accept=".txt,text/plain" class="secondary" />
+      <label class="check"><input type="checkbox" id="buildUseMods" /> Rares mit Mod-Filtern bepreisen</label>
+    </div>
+    <div id="buildMsg"></div>
+
+    <div id="progressWrap" class="progress-wrap hidden">
+      <div class="hint" id="progressLabel"></div>
+      <div class="bar"><div id="progressBar"></div></div>
+    </div>
+
+    <div id="buildHead" class="hidden"></div>
+    <div id="buildTable"></div>
+    <div id="buildTotal" class="hidden"></div>
+  </section>
+
+  <div class="footnote" id="footnote"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let CONFIG = { league: "Standard", leagues: [], has_session: false, exalted_per_divine: null };
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function showMsg(el, text, type = "error") {
+  el.innerHTML = text ? `<div class="msg ${type}">${esc(text)}</div>` : "";
+}
+function rarClass(r) { return "rar-" + (r || "UNKNOWN"); }
+function statusPill(status, note) {
+  const labels = { found: "gefunden", ballpark: "Ballpark (Rare)", no_match: "kein Treffer",
+                   error: note ? "Fehler: " + note : "beschädigt", pending: "…" };
+  return `<span class="pill ${status}">${esc(labels[status] || status)}</span>`;
+}
+function fmtDiv(v) { return v == null ? "—" : v.toFixed(2) + " div"; }
+function priceText(listing) {
+  if (!listing) return "—";
+  const amt = Number.isInteger(listing.amount) ? listing.amount : listing.amount.toFixed(2);
+  return `${amt} ${esc(listing.currency)}`;
+}
+
+/* ----------------------------- Tabs ----------------------------- */
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    const name = tab.dataset.tab;
+    $("tab-single").classList.toggle("hidden", name !== "single");
+    $("tab-build").classList.toggle("hidden", name !== "build");
+  });
+});
+
+/* ----------------------------- Init ----------------------------- */
+async function init() {
+  try {
+    const r = await fetch("/api/config");
+    CONFIG = await r.json();
+  } catch (e) { /* offline backend */ }
+
+  const sel = $("league");
+  const leagues = (CONFIG.leagues && CONFIG.leagues.length) ? CONFIG.leagues : [CONFIG.league || "Standard"];
+  sel.innerHTML = leagues.map(l => `<option ${l === CONFIG.league ? "selected" : ""}>${esc(l)}</option>`).join("");
+
+  $("singleUseMods").checked = !!CONFIG.default_use_mods;
+  $("buildUseMods").checked = !!CONFIG.default_use_mods;
+
+  if (!CONFIG.has_session) {
+    showMsg($("globalMsg"),
+      "Kein POESESSID in config.json gesetzt – Preisabfragen schlagen fehl. Siehe README.", "warn");
+  }
+  const epd = CONFIG.exalted_per_divine;
+  $("footnote").innerHTML =
+    "Read-only Tool: liest nur, fragt die offizielle Trade-API ab, zeigt an – keine Spiel-Automatisierung. " +
+    (epd ? `Divine-Umrechnung über config.json (aktuell 1 Divine ≈ ${esc(epd)} Exalted). ` : "") +
+    "Preise schwanken, das Cookie läuft ab, und Rare-Matching ist ungenauer als bei fertigen Tools.";
+}
+
+/* --------------------------- Einzel-Item --------------------------- */
+$("priceBtn").addEventListener("click", priceSingle);
+async function priceSingle() {
+  const text = $("itemText").value.trim();
+  showMsg($("singleMsg"), "");
+  $("singleResult").innerHTML = "";
+  if (!text) { showMsg($("singleMsg"), "Bitte Item-Text einfügen.", "info"); return; }
+
+  $("priceBtn").disabled = true;
+  $("singleSpin").classList.remove("hidden");
+  try {
+    const resp = await fetch("/api/price", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, use_mods: $("singleUseMods").checked, league: $("league").value }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      showMsg($("singleMsg"), data.error || "Fehler bei der Abfrage.", resp.status === 429 ? "warn" : "error");
+      return;
+    }
+    renderSingle(data);
+  } catch (e) {
+    showMsg($("singleMsg"), "Verbindung zum Backend fehlgeschlagen.", "error");
+  } finally {
+    $("priceBtn").disabled = false;
+    $("singleSpin").classList.add("hidden");
+  }
+}
+
+function renderSingle(data) {
+  const it = data.item, res = data.result;
+  const head = `
+    <div class="build-head">
+      <span class="cls ${rarClass(it.rarity)}">${esc(it.name || it.base_type || "Item")}</span>
+      <span class="hint">${esc(it.base_type || "")} &middot; ${esc(it.rarity)}
+        ${it.corrupted ? '<span class="corrupt">· Verderbt</span>' : ""}</span>
+      ${statusPill(res.status)}
+    </div>
+    <div class="hint">Gesucht nach: ${esc(res.searched_by || "—")}
+      ${res.total ? "· " + esc(res.total) + " Treffer" : ""}
+      ${res.query_url ? `· <a href="${esc(res.query_url)}" target="_blank">auf pathofexile.com öffnen</a>` : ""}</div>`;
+
+  if (!res.listings || !res.listings.length) {
+    $("singleResult").innerHTML = head +
+      `<div class="msg info">Keine Listings gefunden.</div>`;
+    return;
+  }
+  const rows = res.listings.map(l => `
+    <tr>
+      <td class="price-cell">${priceText(l)}</td>
+      <td class="divine-cell num">${l.divine == null ? "—" : l.divine.toFixed(3)}</td>
+      <td>${esc(l.account)} ${l.online ? "🟢" : "⚪"}</td>
+      <td class="hint">${esc(l.age)}</td>
+    </tr>`).join("");
+  $("singleResult").innerHTML = head + `
+    <table>
+      <thead><tr><th>Preis</th><th class="num">in Divine</th><th>Verkäufer</th><th>Listing-Alter</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+/* ----------------------------- Build-Code ----------------------------- */
+$("buildFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (file) $("buildCode").value = (await file.text()).trim();
+});
+$("buildBtn").addEventListener("click", loadBuild);
+
+async function loadBuild() {
+  const code = $("buildCode").value.trim();
+  showMsg($("buildMsg"), "");
+  $("buildHead").classList.add("hidden");
+  $("buildTotal").classList.add("hidden");
+  $("buildTable").innerHTML = "";
+  if (!code) { showMsg($("buildMsg"), "Bitte PoB-Build-Code einfügen.", "info"); return; }
+
+  $("buildBtn").disabled = true;
+  $("progressWrap").classList.remove("hidden");
+  $("progressBar").style.width = "0%";
+  $("progressLabel").innerHTML = '<span class="spin"></span> Build wird dekodiert …';
+
+  try {
+    const resp = await fetch("/api/build", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, use_mods: $("buildUseMods").checked, league: $("league").value }),
+    });
+    if (!resp.ok && resp.status !== 200) {
+      let msg = "Fehler beim Laden des Builds.";
+      try { msg = (await resp.json()).error || msg; } catch (e) {}
+      showMsg($("buildMsg"), msg, "error");
+      return;
+    }
+    await consumeStream(resp);
+  } catch (e) {
+    showMsg($("buildMsg"), "Verbindung zum Backend fehlgeschlagen.", "error");
+  } finally {
+    $("buildBtn").disabled = false;
+  }
+}
+
+async function consumeStream(resp) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) handleEvent(JSON.parse(line));
+    }
+  }
+}
+
+function handleEvent(ev) {
+  if (ev.type === "error") {
+    $("progressWrap").classList.add("hidden");
+    showMsg($("buildMsg"), ev.message, "error");
+  } else if (ev.type === "build") {
+    renderBuildHead(ev.build);
+    renderBuildRows(ev.items);
+  } else if (ev.type === "progress") {
+    const pct = Math.round((ev.current - 1) / ev.total * 100);
+    $("progressBar").style.width = pct + "%";
+    $("progressLabel").innerHTML =
+      `<span class="spin"></span> Item ${ev.current} von ${ev.total} wird bepreist – ${esc(ev.name)} …`;
+  } else if (ev.type === "priced") {
+    updateRow(ev.index, ev.result);
+  } else if (ev.type === "done") {
+    $("progressBar").style.width = "100%";
+    $("progressLabel").textContent = "Fertig.";
+    setTimeout(() => $("progressWrap").classList.add("hidden"), 600);
+    renderTotal(ev);
+  }
+}
+
+function renderBuildHead(b) {
+  const head = $("buildHead");
+  head.classList.remove("hidden");
+  const parts = [];
+  if (b.class) parts.push(esc(b.class));
+  if (b.ascendancy && b.ascendancy !== b.class) parts.push(esc(b.ascendancy));
+  head.innerHTML = `
+    <div class="build-head">
+      <span class="cls">${parts.join(" · ") || "Unbekannte Klasse"}</span>
+      ${b.level ? `<span class="hint">Level ${esc(b.level)}</span>` : ""}
+    </div>`;
+}
+
+function renderBuildRows(items) {
+  const rows = items.map(it => `
+    <tr id="item-${it.index}">
+      <td class="hint">${esc(it.slot || "")}</td>
+      <td class="${rarClass(it.rarity)}">${esc(it.name)}
+        ${it.corrupted ? '<span class="corrupt"> · Verderbt</span>' : ""}</td>
+      <td class="hint">${esc(it.rarity)}</td>
+      <td class="hint">${esc(it.short_mods || "")}</td>
+      <td class="price-cell" id="price-${it.index}">—</td>
+      <td class="divine-cell num" id="div-${it.index}">—</td>
+      <td id="status-${it.index}">${statusPill(it.status)}</td>
+    </tr>`).join("");
+  $("buildTable").innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Slot</th><th>Item</th><th>Rarity</th><th>Mods</th>
+        <th>Preis</th><th class="num">in Divine</th><th>Status</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function updateRow(index, res) {
+  const statusCell = $("status-" + index);
+  if (!statusCell) return;
+  statusCell.innerHTML = statusPill(res.status, res.note);
+  const priceCell = $("price-" + index);
+  const divCell = $("div-" + index);
+  if (res.listing) {
+    priceCell.innerHTML = priceText(res.listing) +
+      (res.query_url ? ` <a href="${esc(res.query_url)}" target="_blank" title="auf pathofexile.com">↗</a>` : "");
+    divCell.textContent = res.cheapest_divine == null ? "—" : res.cheapest_divine.toFixed(2);
+  } else {
+    priceCell.textContent = res.status === "no_match" ? "kein Treffer" : "—";
+  }
+}
+
+function renderTotal(ev) {
+  const box = $("buildTotal");
+  box.classList.remove("hidden");
+  const exalt = ev.exalted_per_divine ? ` (≈ ${Math.round(ev.total_divine * ev.exalted_per_divine)} Exalted)` : "";
+  box.innerHTML = `
+    <div class="total-box">
+      <span class="hint">Geschätzte Gesamtsumme (günstigstes Listing je Item)</span>
+      <span class="big">${ev.total_divine.toFixed(2)} Divine${exalt}</span>
+    </div>`;
+}
+
+init();
+</script>
+</body>
+</html>
