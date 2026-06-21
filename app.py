@@ -461,8 +461,9 @@ def parse_item_text(text: str) -> dict:
     Parst kopierten Item-Text oder PoB-Item-Text in ein einheitliches Dict:
     {name, base_type, rarity, mods[], corrupted, ok, short_mods}.
     """
-    raw_lines = [ln.rstrip() for ln in text.replace("\r\n", "\n").split("\n")]
-    lines = [ln for ln in raw_lines if ln.strip()]
+    # Zeilen voll trimmen: PoB rückt den Item-Text im XML ein, daher müssen
+    # auch führende Leerzeichen/Tabs weg, sonst wird "Rarity:" nicht erkannt.
+    lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
     result = {
         "name": None,
         "base_type": None,
@@ -840,8 +841,14 @@ def price_item(parsed: dict, league: str, use_mods: bool) -> dict:
         return out
 
     realm = CONFIG.get("realm", "poe2")
+    last_api_error: Optional[str] = None
     for query, hit_status, desc in attempts:
-        search = _do_search(league, query)
+        try:
+            search = _do_search(league, query)
+        except ApiError as exc:
+            # z. B. 400 "Unknown item base type" -> nächste Strategie versuchen
+            last_api_error = str(exc)
+            continue
         result_hashes = search.get("result") or []
         query_id = search.get("id")
         out["searched_by"] = desc
@@ -862,6 +869,9 @@ def price_item(parsed: dict, league: str, use_mods: bool) -> dict:
         out["cheapest_divine"] = min(known) if known else None
         return out
 
+    # Alle Strategien ohne Treffer: API-Fehler nur melden, wenn KEINE Suche lief
+    if last_api_error and not out["searched_by"]:
+        raise ApiError(last_api_error)
     return out
 
 
