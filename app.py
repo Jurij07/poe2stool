@@ -892,7 +892,7 @@ def index():
 @app.get("/api/config")
 def api_config():
     return {
-        "league": CONFIG.get("league", "Standard"),
+        "league": current_league(),
         "realm": CONFIG.get("realm", "poe2"),
         "default_use_mods": bool(CONFIG.get("default_use_mods", False)),
         "exalted_per_divine": CONFIG.get("exalted_per_divine"),
@@ -901,24 +901,76 @@ def api_config():
     }
 
 
-def _get_leagues() -> List[str]:
-    fallback = []
-    cfg_league = CONFIG.get("league")
-    if cfg_league:
-        fallback.append(cfg_league)
-    for extra in ("Standard", "Hardcore"):
-        if extra not in fallback:
-            fallback.append(extra)
+# --- Liga-Erkennung: "auto" -> immer die aktuelle (neueste) Challenge-Liga ----
+
+_LEAGUES_CACHE: Dict[str, object] = {"ts": 0.0, "raw": []}
+_PERMANENT_LEAGUES = {
+    "Standard", "Hardcore", "SSF Standard", "SSF Hardcore",
+    "Solo Self-Found", "Ruthless", "HC Ruthless",
+}
+
+
+def _fetch_leagues_raw() -> List[dict]:
+    """Holt die Liga-Liste von der Trade-API (im Speicher 1 h gecacht)."""
+    now = time.time()
+    raw = _LEAGUES_CACHE.get("raw") or []
+    if raw and (now - float(_LEAGUES_CACHE.get("ts", 0))) < 3600:
+        return raw  # type: ignore[return-value]
     try:
         data = api_request("GET", f"{TRADE_BASE}/data/leagues", "data",
                            params={"realm": CONFIG.get("realm", "poe2")})
-        leagues = [l.get("id") for l in data.get("result", []) if l.get("id")]
-        if leagues:
-            if cfg_league and cfg_league not in leagues:
-                leagues.insert(0, cfg_league)
-            return leagues
+        raw = [l for l in data.get("result", []) if l.get("id")]
     except (ApiError, SessionError, RateLimitError):
-        pass
+        raw = []
+    if raw:
+        _LEAGUES_CACHE["raw"] = raw
+        _LEAGUES_CACHE["ts"] = now
+    return raw
+
+
+def _is_variant_league(league_id: str) -> bool:
+    """True fuer HC-/SSF-/Ruthless-Varianten – nicht die Standard-Challenge-Liga."""
+    low = league_id.lower()
+    return (
+        low.startswith("hardcore") or low.startswith("hc ")
+        or "ssf" in low or "ruthless" in low or "solo self-found" in low
+    )
+
+
+def detect_current_league(raw: List[dict]) -> Optional[str]:
+    """
+    Findet die aktuelle (neueste) Challenge-Liga: weder permanent (Standard/
+    Hardcore) noch eine HC/SSF-Variante. Robust gegenueber der Reihenfolge.
+    """
+    ids = [l["id"] for l in raw]
+    challenge = [i for i in ids if i not in _PERMANENT_LEAGUES and not _is_variant_league(i)]
+    if challenge:
+        return challenge[0]
+    nonperm = [i for i in ids if i not in _PERMANENT_LEAGUES]
+    return nonperm[0] if nonperm else (ids[0] if ids else None)
+
+
+def current_league() -> str:
+    """Aufgeloeste Standard-Liga. 'auto'/leer -> neueste Challenge-Liga erkennen."""
+    configured = (CONFIG.get("league") or "").strip()
+    if configured and configured.lower() != "auto":
+        return configured
+    return detect_current_league(_fetch_leagues_raw()) or "Standard"
+
+
+def _get_leagues() -> List[str]:
+    """Liste aller Liga-IDs fuer das Dropdown (aktuelle Challenge-Liga zuerst)."""
+    ids = [l["id"] for l in _fetch_leagues_raw()]
+    if ids:
+        cur = current_league()
+        if cur in ids:
+            ids = [cur] + [i for i in ids if i != cur]
+        return ids
+    # Offline-Fallback
+    fallback = [current_league()]
+    for extra in ("Standard", "Hardcore"):
+        if extra not in fallback:
+            fallback.append(extra)
     return fallback
 
 
@@ -934,7 +986,7 @@ def _error_response(exc: Exception) -> JSONResponse:
 
 @app.post("/api/price")
 def api_price(req: PriceRequest):
-    league = req.league or CONFIG.get("league", "Standard")
+    league = req.league or current_league()
     parsed = parse_item_text(req.text or "")
     if not parsed.get("ok"):
         return JSONResponse(status_code=400,
@@ -1040,7 +1092,7 @@ def build_stream(code: str, use_mods: bool, league: str):
 
 @app.post("/api/build")
 def api_build(req: BuildRequest):
-    league = req.league or CONFIG.get("league", "Standard")
+    league = req.league or current_league()
     return StreamingResponse(
         build_stream(req.code or "", req.use_mods, league),
         media_type="application/x-ndjson",

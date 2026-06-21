@@ -35,7 +35,7 @@ Dann `config.json` öffnen und ausfüllen:
 | Feld                 | Bedeutung |
 |----------------------|-----------|
 | `poesessid`          | Dein Session-Cookie (siehe unten). |
-| `league`             | Liga-Name, z. B. `Standard` oder die aktuelle Challenge-Liga. |
+| `league`             | `auto` = das Tool wählt **automatisch immer die neueste Liga** (aktuell „Aldur's…"). Alternativ einen festen Liga-Namen eintragen (z. B. `Standard`). |
 | `realm`              | `poe2` (nicht ändern). |
 | `user_agent`         | **Pflicht** laut GGG-Policy: beschreibender Name **+ Kontakt**, z. B. `MyPoe2PriceCheck/1.0 (kontakt: deine@mail.tld)`. |
 | `exalted_per_divine` | Wechselkurs für die Divine-Umrechnung (wie viele Exalted = 1 Divine). Passe ihn an den aktuellen Markt an. |
