@@ -117,7 +117,8 @@
   <span class="grow"></span>
   <span class="league-box">
     Liga:
-    <select id="league"></select>
+    <input id="league" list="leagueList" autocomplete="off" placeholder="Runes of Aldur" style="width:180px" />
+    <datalist id="leagueList"></datalist>
   </span>
 </header>
 
@@ -241,9 +242,11 @@ async function init() {
     CONFIG = await r.json();
   } catch (e) { /* offline backend */ }
 
-  const sel = $("league");
+  // Liga ist ein freies Textfeld mit Vorschlägen: man kann jede Liga
+  // (z. B. "Runes of Aldur") eintippen, auch wenn die Auto-Erkennung scheitert.
   const leagues = (CONFIG.leagues && CONFIG.leagues.length) ? CONFIG.leagues : [CONFIG.league || "Standard"];
-  sel.innerHTML = leagues.map(l => `<option ${l === CONFIG.league ? "selected" : ""}>${esc(l)}</option>`).join("");
+  $("leagueList").innerHTML = leagues.map(l => `<option value="${esc(l)}"></option>`).join("");
+  $("league").value = CONFIG.league || leagues[0] || "Standard";
 
   // Mod-Filter (Prefixes/Suffixes) standardmäßig AN. In der UI jederzeit
   // abschaltbar; die Checkbox ist die Quelle der Wahrheit für die Suche.
