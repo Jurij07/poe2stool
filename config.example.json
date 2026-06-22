@@ -8,5 +8,7 @@
     "chaos": 0.02
   },
   "default_use_mods": true,
-  "mod_value_tolerance": 0.9
+  "mod_value_tolerance": 0.9,
+  "anthropic_api_key": "",
+  "anthropic_model": "claude-opus-4-8"
 }

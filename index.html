@@ -127,6 +127,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="single">Einzel-Item</div>
     <div class="tab" data-tab="build">Build-Code</div>
+    <div class="tab" data-tab="budget">Budget</div>
   </div>
 
   <!-- ------------------------------- Einzel-Item ------------------------------- -->
@@ -166,6 +167,34 @@
     <div id="buildTotal" class="hidden"></div>
   </section>
 
+  <!-- ------------------------------- Budget ----------------------------------- -->
+  <section id="tab-budget" class="panel hidden">
+    <div class="hint">
+      PoB-Code einfügen, ein <b>Budget in Divine</b> angeben → das Tool preist erst den
+      kompletten Build und sucht dann pro Slot eine <b>günstigere Variante</b>, die ins Budget passt.
+    </div>
+    <textarea id="budgetCode" placeholder="eNqNVle..."></textarea>
+    <div class="row">
+      <label class="check">Budget:
+        <input type="number" id="budgetAmount" min="0" step="1" value="500" style="width:90px" /> div
+      </label>
+      <button id="budgetBtn">Budget berechnen</button>
+      <input type="file" id="budgetFile" accept=".txt,text/plain" class="secondary" />
+      <label class="check"><input type="checkbox" id="budgetUseMods" checked /> Rares mit Mod-Filtern bepreisen</label>
+    </div>
+    <div id="budgetAiHint" class="hint"></div>
+    <div id="budgetMsg"></div>
+
+    <div id="budgetProgressWrap" class="progress-wrap hidden">
+      <div class="hint" id="budgetProgressLabel"></div>
+      <div class="bar"><div id="budgetProgressBar"></div></div>
+    </div>
+
+    <div id="budgetHead" class="hidden"></div>
+    <div id="budgetTable"></div>
+    <div id="budgetTotal" class="hidden"></div>
+  </section>
+
   <div class="footnote" id="footnote"></div>
 </main>
 
@@ -201,6 +230,7 @@ document.querySelectorAll(".tab").forEach(tab => {
     const name = tab.dataset.tab;
     $("tab-single").classList.toggle("hidden", name !== "single");
     $("tab-build").classList.toggle("hidden", name !== "build");
+    $("tab-budget").classList.toggle("hidden", name !== "budget");
   });
 });
 
@@ -219,6 +249,11 @@ async function init() {
   // abschaltbar; die Checkbox ist die Quelle der Wahrheit für die Suche.
   $("singleUseMods").checked = true;
   $("buildUseMods").checked = true;
+  $("budgetUseMods").checked = true;
+
+  $("budgetAiHint").innerHTML = CONFIG.has_ai
+    ? "🤖 KI-Alternativen aktiv: für zu teure Slots werden günstigere Items vorgeschlagen."
+    : "ℹ️ Ohne Anthropic-API-Key in config.json: nur günstigste Version des gleichen Items (keine KI-Alternativen).";
 
   if (!CONFIG.has_session) {
     showMsg($("globalMsg"),
@@ -331,7 +366,7 @@ async function loadBuild() {
   }
 }
 
-async function consumeStream(resp) {
+async function consumeStream(resp, handler = handleEvent) {
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -343,7 +378,7 @@ async function consumeStream(resp) {
     while ((nl = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
-      if (line) handleEvent(JSON.parse(line));
+      if (line) handler(JSON.parse(line));
     }
   }
 }
@@ -370,8 +405,8 @@ function handleEvent(ev) {
   }
 }
 
-function renderBuildHead(b) {
-  const head = $("buildHead");
+function renderBuildHead(b, target = "buildHead") {
+  const head = $(target);
   head.classList.remove("hidden");
   const parts = [];
   if (b.class) parts.push(esc(b.class));
@@ -428,6 +463,147 @@ function renderTotal(ev) {
     <div class="total-box">
       <span class="hint">Geschätzte Gesamtsumme (günstigstes Listing je Item)</span>
       <span class="big">${ev.total_divine.toFixed(2)} Divine${exalt}</span>
+    </div>`;
+}
+
+/* ----------------------------- Budget-Modus ----------------------------- */
+$("budgetFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (file) $("budgetCode").value = (await file.text()).trim();
+});
+$("budgetBtn").addEventListener("click", runBudget);
+
+const BUDGET_STATUS = {
+  fits: { cls: "found", label: "passt ins Budget" },
+  downgraded: { cls: "ballpark", label: "günstigere Basis" },
+  alternative: { cls: "ballpark", label: "KI-Alternative" },
+  over: { cls: "error", label: "über Budget" },
+  no_price: { cls: "no_match", label: "kein Preis" },
+  pending: { cls: "pending", label: "…" },
+};
+function budgetPill(status) {
+  const s = BUDGET_STATUS[status] || BUDGET_STATUS.pending;
+  return `<span class="pill ${s.cls}">${esc(s.label)}</span>`;
+}
+
+async function runBudget() {
+  const code = $("budgetCode").value.trim();
+  const budget = parseFloat($("budgetAmount").value);
+  showMsg($("budgetMsg"), "");
+  $("budgetHead").classList.add("hidden");
+  $("budgetTotal").classList.add("hidden");
+  $("budgetTable").innerHTML = "";
+  if (!code) { showMsg($("budgetMsg"), "Bitte PoB-Build-Code einfügen.", "info"); return; }
+  if (!(budget > 0)) { showMsg($("budgetMsg"), "Bitte ein Budget in Divine (> 0) eingeben.", "info"); return; }
+
+  $("budgetBtn").disabled = true;
+  $("budgetProgressWrap").classList.remove("hidden");
+  $("budgetProgressBar").style.width = "0%";
+  $("budgetProgressLabel").innerHTML = '<span class="spin"></span> Build wird dekodiert …';
+
+  try {
+    const resp = await fetch("/api/budget", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, budget, use_mods: $("budgetUseMods").checked, league: $("league").value }),
+    });
+    if (!resp.ok && resp.status !== 200) {
+      let msg = "Fehler beim Budget-Lauf.";
+      try { msg = (await resp.json()).error || msg; } catch (e) {}
+      showMsg($("budgetMsg"), msg, "error");
+      return;
+    }
+    await consumeStream(resp, handleBudgetEvent);
+  } catch (e) {
+    showMsg($("budgetMsg"), "Verbindung zum Backend fehlgeschlagen.", "error");
+  } finally {
+    $("budgetBtn").disabled = false;
+  }
+}
+
+function handleBudgetEvent(ev) {
+  if (ev.type === "error") {
+    $("budgetProgressWrap").classList.add("hidden");
+    showMsg($("budgetMsg"), ev.message, "error");
+  } else if (ev.type === "build") {
+    renderBuildHead(ev.build, "budgetHead");
+    renderBudgetRows(ev.items, ev.budget, ev.has_ai);
+  } else if (ev.type === "progress") {
+    const pct = ev.total ? Math.round((ev.current - 1) / ev.total * 100) : 50;
+    $("budgetProgressBar").style.width = pct + "%";
+    const phase = ev.phase === "ai" ? "" : `Item ${ev.current} von ${ev.total} – `;
+    $("budgetProgressLabel").innerHTML = `<span class="spin"></span> ${phase}${esc(ev.name)} …`;
+  } else if (ev.type === "priced") {
+    const cell = $("bcur-" + ev.index);
+    if (cell) cell.textContent = ev.result.current_divine == null ? "—" : ev.result.current_divine.toFixed(2);
+  } else if (ev.type === "current_total") {
+    $("budgetProgressLabel").innerHTML = '<span class="spin"></span> Suche günstigere Varianten …';
+  } else if (ev.type === "budget") {
+    updateBudgetRow(ev.index, ev.result);
+  } else if (ev.type === "done") {
+    $("budgetProgressBar").style.width = "100%";
+    $("budgetProgressLabel").textContent = "Fertig.";
+    setTimeout(() => $("budgetProgressWrap").classList.add("hidden"), 600);
+    renderBudgetTotal(ev);
+  }
+}
+
+function renderBudgetRows(items, budget, hasAi) {
+  const rows = items.map(it => `
+    <tr id="brow-${it.index}">
+      <td class="hint">${esc(it.slot || "")}</td>
+      <td class="${rarClass(it.rarity)}">${esc(it.name)}</td>
+      <td class="divine-cell num" id="bcur-${it.index}">${it.ok ? "…" : "—"}</td>
+      <td class="num hint" id="bbud-${it.index}">—</td>
+      <td id="bsugg-${it.index}" class="hint">—</td>
+      <td class="divine-cell num" id="bnew-${it.index}">—</td>
+      <td id="bstat-${it.index}">${it.ok ? budgetPill("pending") : statusPill("error")}</td>
+    </tr>`).join("");
+  $("budgetTable").innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Slot</th><th>Original-Item</th><th class="num">aktuell</th>
+        <th class="num">Slot-Budget</th><th>günstigere Variante</th>
+        <th class="num">neu</th><th>Status</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function updateBudgetRow(index, r) {
+  const stat = $("bstat-" + index);
+  if (!stat) return;
+  stat.innerHTML = budgetPill(r.status);
+  if (r.slot_budget != null) $("bbud-" + index).textContent = r.slot_budget.toFixed(2);
+  if (r.new_divine != null) $("bnew-" + index).textContent = r.new_divine.toFixed(2);
+
+  const suggCell = $("bsugg-" + index);
+  if (r.status === "fits") {
+    suggCell.innerHTML = '<span class="hint">Original behalten</span>';
+  } else if (r.label) {
+    const link = r.query_url ? ` <a href="${esc(r.query_url)}" target="_blank" title="auf pathofexile.com">↗</a>` : "";
+    const reason = r.reason ? `<div class="hint">${esc(r.reason)}</div>` : "";
+    suggCell.innerHTML = `${esc(r.label)}${link}${reason}`;
+  } else if (r.status === "over") {
+    suggCell.innerHTML = '<span class="corrupt">kein günstigerer Treffer</span>';
+  }
+}
+
+function renderBudgetTotal(ev) {
+  const box = $("budgetTotal");
+  box.classList.remove("hidden");
+  const within = ev.new_total <= ev.budget;
+  const cls = within ? "found" : "error";
+  const verdict = within
+    ? `✅ im Budget (${ev.budget} div)`
+    : `⚠️ noch ${(ev.new_total - ev.budget).toFixed(2)} div über dem Budget (${ev.budget} div)`;
+  box.innerHTML = `
+    <div class="total-box">
+      <div>
+        <div class="hint">Original-Build: <b>${ev.current_total.toFixed(2)} div</b>
+          &nbsp;→&nbsp; Budget-Build: <span class="big">${ev.new_total.toFixed(2)} div</span></div>
+        <div class="hint">Ersparnis: ${ev.savings.toFixed(2)} div</div>
+      </div>
+      <span class="pill ${cls}" style="font-size:13px">${esc(verdict)}</span>
     </div>`;
 }
 

@@ -910,6 +910,269 @@ def price_item(parsed: dict, league: str, use_mods: bool) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Budget-Modus: KI-gestützte, günstigere Alternativen (optional)
+# --------------------------------------------------------------------------- #
+
+_ANTHROPIC_CLIENT = None
+_ANTHROPIC_FAILED = False
+
+# JSON-Schema für die strukturierte KI-Antwort (pro Slot 1-2 Vorschläge)
+_ALT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "alternatives": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "slot": {"type": "string"},
+                    "suggestions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "base_type": {"type": "string"},
+                                "rarity": {"type": "string",
+                                           "enum": ["UNIQUE", "RARE", "MAGIC", "NORMAL"]},
+                                "reason": {"type": "string"},
+                            },
+                            "required": ["name", "base_type", "rarity", "reason"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["slot", "suggestions"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["alternatives"],
+    "additionalProperties": False,
+}
+
+
+def has_ai() -> bool:
+    return bool((CONFIG.get("anthropic_api_key") or "").strip() or os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def get_anthropic_client():
+    """Erzeugt (einmalig) den Anthropic-Client, falls ein API-Key vorhanden ist."""
+    global _ANTHROPIC_CLIENT, _ANTHROPIC_FAILED
+    if _ANTHROPIC_FAILED:
+        return None
+    if _ANTHROPIC_CLIENT is not None:
+        return _ANTHROPIC_CLIENT
+    key = (CONFIG.get("anthropic_api_key") or "").strip() or os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return None
+    try:
+        import anthropic
+        _ANTHROPIC_CLIENT = anthropic.Anthropic(api_key=key)
+        return _ANTHROPIC_CLIENT
+    except Exception as exc:  # SDK fehlt / Key ungültig -> deterministisch weiter
+        print(f"[ai] Anthropic-Client nicht verfügbar: {exc}")
+        _ANTHROPIC_FAILED = True
+        return None
+
+
+def ai_suggest_alternatives(over_items: List[dict]) -> Dict[str, List[dict]]:
+    """
+    Eine einzige Anfrage an Claude für ALLE über-Budget-Slots.
+    Liefert {slot: [ {name, base_type, rarity, reason}, ... ]}.
+    Vorschläge werden anschließend gegen den Live-Markt geprüft.
+    """
+    client = get_anthropic_client()
+    if client is None or not over_items:
+        return {}
+    model = CONFIG.get("anthropic_model") or "claude-opus-4-8"
+
+    lines = []
+    for it in over_items:
+        lines.append(
+            f'- Slot "{it["slot"]}": {it["rarity"]} {it.get("name") or ""} '
+            f'(Basistyp: {it.get("base_type") or "?"}), aktuell ~{it["current_divine"]:.1f} div, '
+            f'Slot-Budget ~{it["slot_budget"]:.1f} div. Mods: {it.get("short_mods", "")}'
+        )
+    user = (
+        "Ich baue einen Path of Exile 2 Build mit begrenztem Budget nach. Für die folgenden "
+        "Ausrüstungs-Slots ist das Original-Item zu teuer. Schlage pro Slot 1-2 GÜNSTIGERE, "
+        "real existierende PoE2-Items vor, die eine möglichst ähnliche Funktion erfüllen "
+        "(billigeres Unique oder sinnvoller Rare-/Magic-Basistyp). Gib Item-Name und Basistyp "
+        "EXAKT so an, wie sie im offiziellen Trade erscheinen. Die Vorschläge werden gegen den "
+        "Live-Markt geprüft – erfinde keine Items.\n\n" + "\n".join(lines)
+    )
+    try:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=2000,
+            system="Du bist ein erfahrener Path-of-Exile-2-Theorycrafter. "
+                   "Antworte ausschließlich im vorgegebenen JSON-Format.",
+            messages=[{"role": "user", "content": user}],
+            output_config={"format": {"type": "json_schema", "schema": _ALT_SCHEMA}},
+        )
+        text = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
+        data = json.loads(text)
+    except Exception as exc:  # KI optional -> bei Fehler einfach ohne Alternativen
+        print(f"[ai] Vorschlag fehlgeschlagen: {exc}")
+        return {}
+
+    out: Dict[str, List[dict]] = {}
+    for entry in data.get("alternatives", []):
+        slot = entry.get("slot")
+        if slot:
+            out[slot] = entry.get("suggestions", []) or []
+    return out
+
+
+def budget_stream(code: str, budget: float, league: str, use_mods: bool):
+    """
+    NDJSON-Stream für den Budget-Modus:
+      build -> progress/priced (aktuelle Preise) -> current_total ->
+      budget (pro Slot: passt / billigere Basis / KI-Alternative / über Budget) -> done
+    """
+    def line(obj: dict) -> str:
+        return json.dumps(obj, ensure_ascii=False) + "\n"
+
+    try:
+        raw = decode_pob_code(code)
+    except DecodeError as exc:
+        yield line({"type": "error", "message": str(exc)})
+        return
+    try:
+        build_info, items = parse_pob_xml(raw)
+    except Exception as exc:
+        yield line({"type": "error", "message": f"Build konnte nicht gelesen werden: {exc}"})
+        return
+    if not items:
+        yield line({"type": "error", "message": "Keine Items im Build gefunden."})
+        return
+
+    yield line({
+        "type": "build", "build": build_info, "budget": budget, "has_ai": has_ai(),
+        "items": [_item_payload(it, i) for i, it in enumerate(items)],
+    })
+
+    # ---- Phase 1: aktuelle Preise ----
+    priceable = [(i, it) for i, it in enumerate(items) if it.get("ok")]
+    current_total = 0.0
+    info_by_index: Dict[int, dict] = {}
+    for n, (i, it) in enumerate(priceable):
+        yield line({"type": "progress", "phase": "current", "current": n + 1,
+                    "total": len(priceable),
+                    "name": it.get("name") or it.get("base_type") or "Item"})
+        try:
+            res = price_item(it, league, use_mods)
+        except SessionError as exc:
+            yield line({"type": "error", "message": str(exc)})
+            return
+        except Exception:
+            res = {"status": "error", "cheapest_divine": None, "listings": [], "query_url": None}
+        cur = res.get("cheapest_divine")
+        if cur is not None:
+            current_total += cur
+        info_by_index[i] = {"price": cur, "item": it}
+        yield line({"type": "priced", "index": i, "result": {
+            "status": res.get("status"),
+            "current_divine": cur,
+            "query_url": res.get("query_url"),
+            "listing": res["listings"][0] if res.get("listings") else None,
+        }})
+
+    yield line({"type": "current_total", "current_total": round(current_total, 2)})
+
+    # ---- Budget anteilig auf Slots verteilen + günstigere Optionen ----
+    plan: Dict[int, dict] = {}
+    over_items: List[dict] = []
+    for i, info in info_by_index.items():
+        cur, it = info["price"], info["item"]
+        if cur is None:
+            plan[i] = {"chosen": None, "status": "no_price"}
+            yield line({"type": "budget", "index": i, "result": {"status": "no_price"}})
+            continue
+        slot_budget = budget * (cur / current_total) if current_total > 0 else 0.0
+        if slot_budget <= 0 or cur <= slot_budget:
+            plan[i] = {"chosen": cur, "status": "fits"}
+            yield line({"type": "budget", "index": i, "result": {
+                "status": "fits", "slot_budget": round(slot_budget, 2),
+                "new_divine": round(cur, 2)}})
+            continue
+
+        # über Budget -> billigere Version der gleichen Basis (Rare/Magic/Normal)
+        option = None
+        rarity = (it.get("rarity") or "").upper()
+        if rarity in ("RARE", "MAGIC", "NORMAL") and it.get("base_type"):
+            try:
+                base_res = price_item(
+                    {"rarity": "NORMAL", "base_type": it["base_type"],
+                     "name": it["base_type"], "mods": [], "ok": True},
+                    league, False)
+                bp = base_res.get("cheapest_divine")
+                if bp is not None and bp < cur:
+                    option = {"price": bp, "label": f"billigster {it['base_type']}",
+                              "query_url": base_res.get("query_url"),
+                              "listing": base_res["listings"][0] if base_res.get("listings") else None}
+            except Exception:
+                pass
+
+        best_price = option["price"] if option else cur
+        status = "downgraded" if option else "over"
+        plan[i] = {"chosen": best_price, "status": status, "slot_budget": slot_budget}
+        if best_price > slot_budget:  # immer noch zu teuer -> KI-Kandidat
+            over_items.append({
+                "index": i, "slot": it.get("slot"), "rarity": rarity,
+                "name": it.get("name"), "base_type": it.get("base_type"),
+                "short_mods": it.get("short_mods", ""),
+                "current_divine": cur, "slot_budget": slot_budget})
+        yield line({"type": "budget", "index": i, "result": {
+            "status": status, "slot_budget": round(slot_budget, 2),
+            "new_divine": round(best_price, 2),
+            "label": option["label"] if option else None,
+            "query_url": option.get("query_url") if option else None,
+            "listing": option.get("listing") if option else None}})
+
+    # ---- KI-Alternativen (eine Anfrage für alle teuren Slots) ----
+    if over_items and has_ai():
+        yield line({"type": "progress", "phase": "ai", "current": 1, "total": 1,
+                    "name": f"KI sucht Alternativen für {len(over_items)} Slot(s)"})
+        suggestions = ai_suggest_alternatives(over_items)
+        by_slot = {oi["slot"]: oi for oi in over_items}
+        for slot, sugg_list in suggestions.items():
+            oi = by_slot.get(slot)
+            if not oi:
+                continue
+            i = oi["index"]
+            best = None
+            for s in (sugg_list or [])[:2]:
+                parsed = {"rarity": (s.get("rarity") or "UNIQUE").upper(),
+                          "name": s.get("name") or None,
+                          "base_type": s.get("base_type") or None,
+                          "mods": [], "ok": True}
+                try:
+                    r = price_item(parsed, league, False)
+                except Exception:
+                    continue
+                p = r.get("cheapest_divine")
+                if p is not None and (best is None or p < best["price"]):
+                    best = {"price": p, "name": s.get("name") or s.get("base_type"),
+                            "reason": s.get("reason", ""), "query_url": r.get("query_url"),
+                            "listing": r["listings"][0] if r.get("listings") else None}
+            if best and best["price"] < (plan[i].get("chosen") or oi["current_divine"]):
+                plan[i]["chosen"] = best["price"]
+                plan[i]["status"] = "alternative"
+                yield line({"type": "budget", "index": i, "result": {
+                    "status": "alternative", "slot_budget": round(oi["slot_budget"], 2),
+                    "new_divine": round(best["price"], 2),
+                    "label": best["name"], "reason": best.get("reason", ""),
+                    "query_url": best.get("query_url"), "listing": best.get("listing")}})
+
+    new_total = sum(p["chosen"] for p in plan.values() if p.get("chosen") is not None)
+    yield line({"type": "done", "current_total": round(current_total, 2),
+                "new_total": round(new_total, 2), "budget": budget,
+                "savings": round(current_total - new_total, 2)})
+
+
+# --------------------------------------------------------------------------- #
 # FastAPI
 # --------------------------------------------------------------------------- #
 
@@ -928,6 +1191,13 @@ class BuildRequest(BaseModel):
     league: Optional[str] = None
 
 
+class BudgetRequest(BaseModel):
+    code: str
+    budget: float
+    use_mods: bool = True
+    league: Optional[str] = None
+
+
 @app.get("/")
 def index():
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
@@ -941,6 +1211,7 @@ def api_config():
         "default_use_mods": bool(CONFIG.get("default_use_mods", False)),
         "exalted_per_divine": CONFIG.get("exalted_per_divine"),
         "has_session": bool((CONFIG.get("poesessid") or "").strip()),
+        "has_ai": has_ai(),
         "leagues": _get_leagues(),
     }
 
@@ -1139,6 +1410,16 @@ def api_build(req: BuildRequest):
     league = req.league or current_league()
     return StreamingResponse(
         build_stream(req.code or "", req.use_mods, league),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/budget")
+def api_budget(req: BudgetRequest):
+    league = req.league or current_league()
+    return StreamingResponse(
+        budget_stream(req.code or "", float(req.budget or 0), league, req.use_mods),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
